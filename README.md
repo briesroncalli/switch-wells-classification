@@ -11,6 +11,11 @@ See Gelman et al. (2004) for a discussion of data collection. Briefly, arsenic l
 4. The highest education level in the household.
 
 ## Files
-Water-Quality-Project.Rmd -> Main body of data analysis, containing data preprocessing, EDA, and all of the modeling other than the random forest, SVM, and NN. Also contains discussion and analysis of modeling.
-BenRR_WaterQuality.html -> Knitted file RMarkdown file.
-WaterQuality_NN.ipynb -> Python jupyter notebook using sklearn library to do random forest decision tree, support vector machine, and neural network models.
+#### Water-Quality-Project.Rmd: 
+Main body of data analysis, containing data preprocessing, EDA, and all of the modeling other than the random forest, SVM, and NN. Also contains discussion and analysis of modeling. 
+
+#### BenRR_WaterQuality.html: 
+Knitted file RMarkdown file. 
+
+#### WaterQuality_NN.ipynb:
+Python jupyter notebook using sklearn library to do random forest decision tree, support vector machine, and neural network models.
