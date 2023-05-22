@@ -1,0 +1,1131 @@
+---
+title: "Water Quality"
+output: html_document
+---
+
+
+## Introduction
+
+Arsenic naturally occurs in groundwater sources around the world. Arsenic contamination of groundwater affects millions of people around the world including the United States, Nicaragua, Argentina, China, Mexico, Chile, Bangladesh, India, and Vietnam, for example (Smith et al. 2000; Amini et al. 2008; Lin et al. 2017). The World Health Organization (WHO 2018a) estimates that over 140 million people in 50 countries are exposed to arsenic contaminated drinking water above the WHO guideline of 10 $\mu$g/L. Health effects of arsenic exposure include numerous types of cancer and other disorders.
+
+This project follows an analysis of a public health study performed in rural Bangladesh (Gelman et al. 2004). In this study, wells used for drinking water were analyzed for arsenic contamination and correspondingly labeled as safe or unsafe. The study determined whether households switched the well used for drinking water and measured. Additionally, several variables where measured that were thought to possibly influence the decision of whether or not to switch wells. Here, we will investigate how accurately we can predict whether or not a household will switch wells based on these environmental variables.
+
+
+## Data Collection
+
+See Gelman et al. (2004) for a discussion of data collection. Briefly, arsenic levels were measured in Araihazar, Bangladesh during the years 1999 - 2000. Additional information was collected by a survey:
+1. Whether or not the household swithed wells.
+2. The distance (in meters) to the closest known safe well.
+3. Whether any members of the household are involved in community organizations.
+4. The highest education level in the household.
+
+### Load necessary packages
+
+```{r, warning=FALSE}
+
+#skimr provides a nice summary of a data set
+library(skimr)
+#GGally has a nice pairs plotting function
+library(GGally)
+#tidymodels has a nice workflow for many models. We will use it for XGBoost
+library(tidymodels)
+#xgboost lets us fit XGBoost models
+library(xgboost)
+#vip is used to visualize the importance of predicts in XGBoost models
+library(vip)
+#tidyverse contains packages we will use for processing and plotting data
+library(tidyverse)
+# for doing KNN
+library(kknn)
+
+#Set the plotting theme
+theme_set(theme_bw())
+
+```
+
+## Data Preparation
+
+
+### Load the data 
+
+$\rightarrow$ Load the data set contained in the file `wells.dat` and name the data frame `df`.
+
+```{r}
+df <- read.table("wells.dat")
+```
+
+
+### Explore the contents of the data set
+
+
+$\rightarrow$ Look at the first few rows of the data frame.
+
+
+```{r}
+head(df)
+```
+
+
+
+#### Explore the columns
+
+$\rightarrow$ What are the variables?
+
+The variables in the data set are:
+
+`switch`: An indicator of whether a household switches wells.
+
+`arsenic`: The arsenic level of the household’s well (in hundreds  $\mu$g/L).
+
+`dist`: The distance (in meters) to the closest known safe well.
+
+`assoc`: An indicator of whether any members of the household are involved in community organizations.
+
+`educ`: The highest education level in the household (in years).
+
+
+$\rightarrow$ What variable(s) do we want to predict?
+
+We are interested in whether households switched the wells they were using after wells were labeled as either safe or unsafe, based on measured arsenic levels. So, we are trying to predict `switch`.
+
+
+$\rightarrow$ What variables are possible predictors?
+
+We will consider the following inputs to a model:
+
+The distance (in meters) to the closest known safe well `dist`.
+
+The arsenic level of the household’s well `arsenic`.
+
+Whether any members of the household are involved in community organizations `assoc`.
+
+The highest education level in the household `educ`.
+
+
+#### Rename the columns
+
+The names of the columns in this data frame are understandable, but two of the columns, `switch` and `distance`, have the names of functions that already exist in R. It is bad practice to name your variables or functions after existing functions, so we will change them. While we are at it, we will change some other names to be complete words.
+
+
+```{r}
+
+df <- df %>% 
+  rename(switch_well = "switch",
+         distance = "dist",
+         association = "assoc",
+         education = "educ")
+
+```
+
+```{r}
+
+head(df)
+
+```
+
+
+### Further exploration of basic properties
+
+
+#### Check for a tidy data frame
+
+In a tidy data set, each column is a variable or id and each row is an observation. 
+
+  
+Each column is a variable and each row is an observation, so the data frame is tidy. We are benefiting from some of the pre-processing that was performed on the data.
+
+
+
+$\rightarrow$ How many observations are in the data set? How many missing values are there in each column?
+
+```{r}
+skim_without_charts(df)
+```
+
+There are 3020 observations and no missing values.
+
+Note that all variables are coded as numeric variables, but `switch_well` and `association` are categorical variables that happen to be coded using 0 and 1. We will convert these variables to factors.
+
+
+#### Convert data types for qualitative predictor
+
+$\rightarrow$ Use the `mutate` function to convert `switch_well` and `association` to factors.
+
+```{r}
+df <- df %>% 
+  mutate(association = factor(association)) %>% 
+  mutate(switch_well = factor(switch_well))
+```
+
+
+## Exploratory data analysis
+
+
+We have two main goals when doing exploratory data analysis. The first is that we want to understand the data set more completely. The second goal is to explore relationships between the variables to help guide the modeling process to answer our specific question.
+
+### Numerical summaries
+
+
+$\rightarrow$ What are the ranges of each of the numerical variables? Are the counts of households that switch wells and do not switch wells balanced or unbalanced? That is, do we have roughly equal numbers of households that switch wells and do not switch wells?
+
+```{r}
+skim_without_charts(df)
+```
+
+The arsenic level of the household’s well `arsenic` ranges from 0.51 to 9.65 (hundreds $\mu$g/L).
+
+The distance (in meters) to the closest known safe well `distance` ranges from 0.387 to 340 meters.
+
+The highest education level in the household `education` ranges from 0 to 17.
+
+1737 of 3020 (57.5%) of households switched wells, so the counts are reasonably balanced.
+
+### Graphical summaries
+
+
+$\rightarrow$ Use a pairs-plot to investigate the distributions of the variables and relationships between variables. Consider the following questions:
+
+1. What is the shape of the distribution of the numerical variables?
+
+2. Do the predictor variables have different distributions for households that switch_well and do not switch_well wells?
+
+```{r}
+ggpairs(df,lower = list(continuous = "cor", combo = "box_no_facet", discrete ="facetbar", na = "na"), upper = list(continuous = "points", combo ="facethist", discrete = "facetbar", na = "na"), progress = FALSE)
+```
+
+
+
+#### Plot each input numerical variable vs. switch_well
+
+We want to investigate whether the probability of switching wells is a clear function of the input numerical variables. 
+
+$\rightarrow$ Make scatter plots of `switch_well` vs. each of the input numerical variables.
+
+Plot `switch_well` vs. `arsenic`
+```{r}
+#We only add jitter in the y-direction because we don't want to change the appearance of the dependence of switching on arsenic
+df %>% 
+  ggplot(aes(x = arsenic, y = switch_well)) +
+  geom_jitter(width = 0, height = 0.1) +
+  labs(x = "Arsenic level in nearest well (hundreds micro g/L)", y = "Switch (No = 0, Yes = 1)")
+```
+
+There appears to be a slight increase in the probability of switching as the arsenic level increases, but it is not a dramatic increase.
+
+Plot `switch_well` vs. `distance`
+```{r}
+df %>% 
+  ggplot(aes(x = distance, y = switch_well)) +
+  geom_jitter(width = 0, height = 0.1) +
+  labs(x = "Distance (in meters) to the nearest safe well", y = "Switch (No = 0, Yes = 1)")
+```
+
+There appears to be a slight decrease in the probability of switching as distance increases, but it is not a dramatic increase.
+
+Plot `switch_well` vs. `education`
+```{r}
+#Education is a discrete variable, so we can add jitter in the x-direction and not create any confusion.
+df %>% 
+  ggplot(aes(x = education, y = switch_well)) +
+  geom_jitter(width = 0.15, height = 0.1) +
+  labs(x = "Education level (in years)", y = "Switch (No = 0, Yes = 1)")
+```
+
+There appears to be a slight increase in the probability of switching as the education level increases, but it is not a dramatic increase.
+
+
+
+#### Examine counts of categorical variable vs. switch_well
+
+We want to investigate whether the probability of switching wells is a clear function of the input categorical variables `association`. 
+
+$\rightarrow$ Count the number of switches for each value of `association`. Additionally, calculate the proportion of switches for each value of `association`.
+
+```{r}
+df %>% 
+  group_by(association) %>% 
+  count(switch_well) %>% 
+  mutate(proportion = round(n/sum(n),2)) #I like to round so that we don't see too many decimal places
+```
+
+The numbers are not hugely different, but there is a higher proportion of switches for households that are not involved in community organizations.
+
+
+
+## Exploratory modeling
+
+We will build logistic regression models of increasing complexity in order to further understand the data.
+
+### Fit a model with distance as the predictor
+
+$\rightarrow$ Before fitting, what sign do you expect for the coefficient on distance?
+
+We expect the sign of the coefficient to be negative, because it is reasonable that the probability of switching wells decreases as the distance to the nearest safe well increases.
+
+
+$\rightarrow$ Fit a logistic regression model with distance as the predictor and examine the summary.
+
+
+#### Approach 1: Using glm
+```{r}
+fit_dist <- glm(switch_well ~ distance, family=binomial, data = df)
+
+summary(fit_dist)
+```
+
+
+#### Approach 2: Using tidymodels
+The tidymodels approach will also use glm to fit the model, but it uses a syntax that allows for a common approach to developing models of different types.
+```{r}
+fit_dist <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  fit(switch_well ~ distance, data = df)
+
+tidy(fit_dist)
+```
+
+
+It is difficult to interpret the coefficient on `distance` because distance is measured in meters. We don't expect much of a change in switching behavior for wells that are 1 meter apart. A more natural measure is 100s of meters. We will scale the distance variable to be in units of 100s of meters.
+
+$\rightarrow$ Use the `mutate` function to convert the distance units into 100s of meters.
+
+```{r}
+df <- df %>% 
+  mutate(distance = distance/100)
+```
+
+
+
+$\rightarrow$ Refit the model and inspect the summary. How do you expect the coefficients to change?
+
+```{r}
+fit_dist <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  fit(switch_well ~ distance, data = df)
+
+tidy(fit_dist)
+```
+
+The intercept does not change. The coefficient on distance is multiplied by 100 from what it was before. We can also see that the distance to the nearest well has a statistically significant impact on the probability of switching wells ($p$-value$\approx2\times10^{-10}$. 
+
+
+
+
+$\rightarrow$ Plot the fitted logistic regression model:
+$$P(\text{switch_well} = 1|\text{distance}) = \frac{1}{1 + e^{-(0.61 - 0.62 \times \text{distance})}}$$
+along with the data.
+
+```{r}
+
+ggplot(df,aes(x = distance, y = as.numeric(switch_well)-1)) + 
+  geom_point(position = position_jitter(0,0.02)) + 
+  geom_smooth(method="glm", method.args=list(family="binomial"), se=FALSE, formula = y ~ x) + 
+  labs(x = "Distance (in 100 meters) to the nearest safe well", y = "Switch (No = 0, Yes = 1)")
+
+```
+
+
+#### Interpret the coefficients
+
+
+$\rightarrow$ Interpret the value of $\hat{\beta}_0$.
+
+The estimated probability
+$$P(\text{switch_well} = 1|\text{distance}=0) = \frac{1}{1 + e^{-(0.61)}}\approx 0.65$$
+The estimated probability of switching wells if the nearest safe well is where you live is 65%.
+
+
+
+$\rightarrow$ Interpret the value of $\hat{\beta}_1$ by discussing its sign and what it says about the maximum rate of change of the probability of switching.
+
+$\hat{\beta_1}<0$ so an increase in distance to the nearest safe well is associated with a decrease in probability of switching wells.
+
+The maximum rate of change of the probability of switching is
+$$\frac{\hat{\beta_1}}{4} = \frac{-0.62}{4} \approx -0.155$$
+
+At the point of maximum rate of change of the probability of switching, a 100 meter increase in the distance to the nearest safe well corresponds to a decrease in probability of switching of about 16%.
+
+
+
+### Fit a model with distance and arsenic as predictors
+
+Fit the model and examine the coefficients.
+
+```{r}
+
+fit_dist_ars <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  fit(switch_well ~ distance + arsenic, data = df)
+
+tidy(fit_dist_ars)
+
+```
+
+
+
+#### Explore the model
+
+$\rightarrow$ Interpret the meaning of the coefficients.
+
+The estimated probability
+$$P(\text{switch_well} = 1|\text{distance}=0 \& \text{arsenic}=0) = \frac{1}{1 + e^{-(0.003)}}\approx 50.1$$
+So, the probability of switching wells if the nearest well is where you live and there is no arsenic in your well is about 50%. In other words, it is difficult to predict with certainty whether someone will not change wells.
+
+Since the coefficient related to `distance` is negative, an increasing distance of the nearest safe well decreases the likelihood of changing wells. In contrast, the coefficient for `arsenic` is positive, so an increase in the amount of arsenic increases the likelihood of switching to the nearest safe well. Since the variables `distance` and `arsenic` are not normalized, we cannot directly compare the magnitude of their coefficients.
+
+We can also see that the the maximum rate of change of the probability based on direction only is about 22.4 per 100 meter of increase in distance of the nearest well.
+
+The maximum rate of change of the probability based only on the level of arsenic in the well is about 0.115 per $\mu$g/L
+
+
+$\rightarrow$ Why did the coefficient for `distance` change when arsenic was added?
+
+The coefficient for `distance`  hanged when arsenic was added because it was no longer the sole predictor. Thus, some of the variation in the model can be better explained by `arsenic` instead of `distance`, meaning the coefficient for `distance` changes when `arsenic` is included.
+
+
+#### Visualize
+
+Plot the decision boundary
+
+```{r}
+
+#Give a shorter name for the coefficients to make it easier to read
+betas <- fit_dist_ars$fit$coefficients
+
+df %>% 
+  ggplot(aes(x = distance, y = arsenic, color = factor(switch_well))) +
+  geom_point() +
+  geom_abline(intercept = -betas[1]/betas[3], slope = -betas[2]/betas[3]) +
+  labs(x = "Distance (in 100 meters) to the nearest safe well", y = "Arsenic concentration in well water", color = "Switch well") +
+  scale_color_manual(labels = c("No", "Yes"), values = c("blue", "orange"))
+
+```
+
+
+
+
+## Compare models
+
+We will use logistic regression, XGBoost, and k-nearest neighbors to construct models that predict the probability of switching wells.
+
+To compare the different approaches, we will use a training and testing split of the data set.
+
+We will use the tidymodels approach for all models.
+
+### Get train and test splits
+
+We will split the data into training and testing sets, with 80% of the data kept for training.   
+
+```{r}
+
+#Do the split. Keep 80% for training. Use stratified sampling based on switch_well to keep the proportion of switches in the test and training sets to be approximately equal.
+set.seed(12)
+split <- initial_split(df, prop = 0.8, strata = switch_well)
+
+#Extract the training and testing splits
+df_train <- training(split)
+df_test <- testing(split)
+
+#Write train & test splits to file for additional step (in Python)
+write_csv(df_train, "wells_train.csv")
+write_csv(df_test, "wells_test.csv")
+```
+
+
+### Null model 
+
+The null model prediction always predicts the value of `switch_well` that occurs most often in the training data.
+
+
+$\rightarrow$ What is the null model prediction for `switch_well`?
+
+```{r}
+summary(df_train$switch_well)
+```
+
+The null prediction model predicts that the most common out come is the outcome that occurs all of the time. So, in this case, we would predict that everyone always switches wells since more people in our training data switched wells than didn't.
+
+
+If we always predict that a household will switch wells, how accurate is the prediction on test data?
+
+```{r}
+
+null_accuracy <- sum(df_test$switch_well == 1)/length(df_test$switch_well)
+
+null_accuracy %>% round(3)
+
+```
+
+This represents a baseline that other models will be compared to.
+
+
+### Modeling steps using tidymodels
+
+Using tidymodels, we will take the same steps to modeling for each type of model that we use.
+
+1. Specify a model (e.g. logistic_reg(), boost_tree()) and set an engine
+2. Create a workflow that specifies the model formula to fit and the model type
+3. Fit any hyperparameters
+4. Fit the model to training data
+5. Predict using test data
+6. Assess the model
+
+
+### Logistic regression model
+
+#### Model specification
+
+$\rightarrow$ First specify a logistic regression model with the glm engine.
+
+```{r}
+log_reg_model <- logistic_reg() %>%
+  set_engine("glm")
+```
+
+
+#### Workflow
+
+$\rightarrow$ Create a workflow that specifies the model formula to fit and add the model specification.
+
+```{r}
+log_reg_wf <- workflow() %>%
+  add_formula(switch_well ~ .) %>%
+  add_model(log_reg_model)
+```
+
+
+#### Fit to training data
+
+Fit the model to the training data and explore the coefficients.
+
+$\rightarrow$ First fit the model.
+
+```{r}
+log_reg_fit <- log_reg_wf %>% 
+  fit(df_train) 
+```
+
+
+$\rightarrow$ Examine the coefficients
+
+```{r}
+tidy(log_reg_fit)
+```
+
+Looking at the $p$-values above, we can see that the $p$-values `association1` and `education` are several orders of magnitude larger than those of the other predictors. Thus, they are not statistically significant predictors of whether someone will change wells.
+
+
+#### Predict test data
+
+$\rightarrow$ Generate predictions and bind the predictions together with the true `switch_well` values from the test data.
+
+```{r}
+predictions_log_reg <- log_reg_fit %>%
+  predict(df_test) %>%
+  bind_cols(df_test %>% select(switch_well))
+```
+
+
+#### Assess fit
+
+$\rightarrow$ Plot the confusion matrix.
+
+```{r}
+predictions_log_reg %>%
+  conf_mat(switch_well, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>% 
+  ggplot(aes(Prediction, Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), color = "blue", alpha = 1, size = 10)
+
+```
+
+We will further analyze the performance of the model quantitatively by computing the prediction accuracy, the sensitivity, and the specificity. You should first convince yourself that you can compute these quantities by hand from the confusion matrix.
+
+
+$\rightarrow$ Get the prediction accuracy. This prediction accuracy is equal to the proportion of correct predictions in the test data set. 
+
+```{r}
+log_reg_accuracy <- predictions_log_reg %>%
+  metrics(switch_well, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") %>% 
+  mutate(.estimate = round(.estimate,3))
+
+log_reg_accuracy
+```
+
+
+$\rightarrow$ Compare to  null model prediction
+
+The multiple logistic regression model was correct about 62% of the time, which is a slight improvement in accuracy over the null prediction model's 57.5%.
+
+
+$\rightarrow$ Get the sensitivity. This is the proportion of correct predictions for households that did switch wells.
+
+```{r}
+log_reg_sens <- predictions_log_reg %>%
+  sens(switch_well, .pred_class , event_level = "second") %>%
+  select(-.estimator) %>%
+  mutate(.estimate = round(.estimate,3))
+
+log_reg_sens
+```
+
+The sensitivity of this model is about 79%.
+
+0.385214 t neg
+0.7931034 t pos
+
+$\rightarrow$ Get the specificity. This is the proportion of correct predictions for households that did not switch wells.
+
+```{r}
+log_reg_spec <- predictions_log_reg %>%
+  yardstick::spec(switch_well, .pred_class , event_level = "second") %>%
+  select(-.estimator) %>%
+  mutate(.estimate = round(.estimate,3))
+
+log_reg_spec
+```
+
+The sensitivity of this model is about 39%.
+
+### XGBoost
+
+
+#### Set up the model
+
+The model will be a boosted tree model, so we start by specifying the features of a `boost_tree` model. The`boost_tree` creates a specification of a model, but does not fit the model.
+
+
+$\rightarrow$ First specify an XGBoost model for classification with the xgboost engine. Set`tree_depth`, `min_n`, `loss_reduction`, `sample_size`, `mtry`, and `learn_rate` as parameters to tune. Set `trees` = 1000.
+
+```{r}
+xgb_model <- boost_tree(
+  mode = "classification",  #We are solving a classification problem
+  trees = 1000, 
+  tree_depth = tune(),  # tune() says that we will specify this parameter later
+  min_n = tune(), 
+  loss_reduction = tune(),                     
+  sample_size = tune(), 
+  mtry = tune(),         
+  learn_rate = tune(),                         
+  ) %>% 
+  set_engine("xgboost") ## We will use xgboost to fit the model
+
+xgb_model
+```
+
+
+$\rightarrow$ Create a workflow that specifies the model formula and the model type. We are still setting up the model; this does not fit the model.
+
+<details>
+  <summary>**Show Answer**</summary>
+```{r}
+
+xgb_wf <- workflow() %>%
+  add_formula(switch_well ~ .) %>%
+  add_model(xgb_model)
+
+xgb_wf
+
+```
+
+
+#### Fit the model
+
+We need to fit all of the parameters that we specified as `tune()`. 
+
+
+$\rightarrow$ Specify the parameter grid using the function `grid_latin_hypercube`:
+
+```{r}
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), df_train),
+  learn_rate(),
+  size = 30  #Create 30 sets of the 6 parameters
+)
+```
+
+
+$\rightarrow$ Create folds for cross-validation, using stratified sampling based on `switch_well`.
+
+```{r}
+folds <- vfold_cv(df_train, strata = switch_well)
+```
+
+
+$\rightarrow$ Do the parameter fitting. 
+
+```{r}
+xgb_grid_search <- tune_grid(
+  xgb_wf,              #The workflow
+  resamples = folds,   #The training data split into folds
+  grid = xgb_grid,     #The grid of parameters to fit
+  control = control_grid(save_pred = TRUE)
+)
+
+xgb_grid_search
+```
+
+
+$\rightarrow$ Get the best model based on `accuracy`.
+
+```{r}
+best_xgb <- select_best(xgb_grid_search, "accuracy")
+```
+
+
+$\rightarrow$ Update the workflow with the best parameters.
+
+```{r}
+final_xgb <- finalize_workflow(
+  xgb_wf,
+  best_xgb
+)
+
+final_xgb
+```
+
+
+#### Fit to training data
+
+$\rightarrow$ Fit the model to the training data.
+
+```{r}
+xgb_fit <- final_xgb %>% 
+  fit(df_train)
+```
+
+
+
+#### Predict test data
+
+$\rightarrow$ Generate predictions and bind them together with the true values from the test data.
+
+```{r}
+predictions_xgb <- xgb_fit %>%
+  predict(new_data = df_test) %>% 
+  bind_cols(df_test %>% select(switch_well))
+```
+
+
+#### Assess fit
+
+$\rightarrow$ Plot the confusion matrix
+
+```{r}
+predictions_xgb %>%
+  conf_mat(switch_well, .pred_class) %>% 
+  pluck(1) %>% 
+  as_tibble() %>%
+  ggplot(aes(Prediction, Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), color = "blue", alpha = 1, size = 10)
+
+predictions_xgb
+```
+
+
+$\rightarrow$ Get prediction accuracy. This prediction accuracy is equal to the proportion of correct predictions in the test data set. 
+
+```{r}
+xgb_accuracy <- predictions_xgb %>%
+  metrics(switch_well, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") %>% 
+  mutate(.estimate = round(.estimate,3))
+
+xgb_accuracy
+```
+
+
+$\rightarrow$ Compare to  null model prediction
+
+```{r}
+round(null_accuracy, 3)
+```
+
+
+$\rightarrow$ Get the sensitivity. This is the proportion of correct predictions for households that did switch wells.
+
+```{r}
+xgb_sens <- predictions_xgb %>%
+  sens(switch_well, .pred_class, event_level = "second") %>%
+  select(-.estimator) %>%
+  mutate(.estimate = round(.estimate,3))
+
+xgb_sens
+```
+
+
+$\rightarrow$ Get the specificity. This is the proportion of correct predictions for households that did not switch wells.
+
+```{r}
+xgb_spec <- predictions_xgb %>%
+  yardstick::spec(switch_well, .pred_class, event_level = "second") %>%
+  select(-.estimator) %>%
+  mutate(.estimate = round(.estimate,3))
+
+xgb_spec
+```
+accuracy: 0.603
+sensitivity: 0.767
+specificity: 0.381
+
+#### Relative importance of predictors
+
+$\rightarrow$ Look at which predictors are most important in the model
+
+```{r}
+xgb_fit %>%
+  extract_fit_parsnip() %>%
+  vip(geom = "col")
+```
+
+
+
+### k nearest neighbors
+
+
+
+#### Model specification
+
+First specify a k nearest neighbors model with the kknn engine.
+
+```{r}
+
+knn_model <- nearest_neighbor(
+    mode = "classification",
+    neighbors = tune("K")
+  ) %>%
+  set_engine("kknn")
+
+
+```
+
+
+#### Workflow
+
+Create a workflow that specifies the model formula to fit and the model type.
+
+```{r}
+
+knn_wf <- workflow() %>%
+  add_formula(switch_well ~ .) %>%
+  add_model(knn_model)
+
+```
+
+
+#### Fit the hyperparameter k
+
+Specify a set of values of k to try.
+```{r}
+
+knn_grid <- parameters(knn_wf) %>%  
+  update(K = neighbors(c(1, 50))) %>% 
+  grid_latin_hypercube(size = 10)
+
+knn_grid
+
+```
+
+Use cross validation on the previously defined folds to find the best value of k.
+
+```{r}
+
+knn_grid_search <- tune_grid(
+  knn_wf,
+  resamples = folds,
+  grid = knn_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+knn_grid_search
+```
+
+
+
+Get the best model based on `accuracy`.
+
+```{r}
+
+best_knn <- select_best(knn_grid_search, "accuracy")
+
+```
+
+
+Update the workflow with the best parameter k.
+
+```{r}
+final_knn <- finalize_workflow(
+  knn_wf,
+  best_knn
+)
+
+final_knn
+```
+
+
+#### Fit to training data
+
+Fit the model to the training data and explore the coefficients.
+
+First fit the model.
+```{r}
+
+knn_fit <- final_knn %>% 
+  fit(df_train)
+
+```
+
+
+#### Predict test data
+
+Generate predictions and bind together with the true values from the test data.
+```{r}
+
+predictions_knn <- knn_fit %>%
+  predict(new_data = df_test) %>%
+  bind_cols(df_test %>% select(switch_well))
+
+```
+
+
+#### Assess fit
+
+Visualize the confusion matrix
+
+```{r}
+
+predictions_knn %>%
+  conf_mat(switch_well, .pred_class) %>% 
+  pluck(1) %>% 
+  as_tibble() %>%
+  ggplot(aes(Prediction, Truth, alpha = n)) +
+  geom_tile(show.legend = FALSE) +
+  geom_text(aes(label = n), color = "blue", alpha = 1, size = 10)
+
+```
+
+
+Get prediction accuracy. This prediction accuracy is equal to the proportion of correct predictions in the test data set. 
+```{r}
+
+knn_accuracy <- predictions_knn %>%
+  metrics(switch_well, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") %>% 
+  mutate(.estimate = round(.estimate,3))
+  
+knn_accuracy
+```
+Compare to  null model prediction
+
+The null model is accurate
+
+```{r}
+
+null_accuracy %>% round(3)
+
+```
+
+percent of the time.
+
+
+Get the sensitivity. This is the proportion of correct predictions for households that did switch wells.
+
+```{r}
+
+knn_sens <- predictions_knn %>%
+  sens(switch_well, .pred_class, event_level = "second") %>%
+  select(-.estimator) %>%
+  mutate(.estimate = round(.estimate,3)) 
+
+knn_sens
+```
+
+Get the specificity. This is the proportion of correct predictions for households that did not switch wells.
+
+```{r}
+
+knn_spec <- predictions_knn %>%
+  yardstick::spec(switch_well, .pred_class, event_level = "second") %>%
+  select(-.estimator) %>%
+  mutate(.estimate = round(.estimate,3))
+
+knn_spec
+```
+
+
+
+### Compare models
+
+You used three methods to construct a model. Compare the performance of the models.
+
+Null model
+
+```{r}
+null_accuracy
+```
+
+
+1. Logistic regression
+
+```{r}
+log_reg_accuracy
+log_reg_sens
+log_reg_spec
+```
+
+
+2. XGBoost
+
+```{r}
+xgb_accuracy
+xgb_sens
+xgb_spec
+```
+
+
+3. k nearest neighbors
+
+```{r}
+knn_accuracy
+knn_sens
+knn_spec
+```
+
+
+
+## Additional step
+
+Here, we attempt to improve the accuracy, sensitivity, & specificity of the models by exploring additional models. In particular, I will be implementing a random forest decision tree model, a support vector machine, and a neural network model.
+
+The work for the additional step is done in a Jupyter Notebook using python and the `sklearn` package.
+
+
+
+## Conclusion
+
+Recall, our goal at the outset of this project was to predict whether or not a household will switch wells based on four environmental variables and analyze the accuracy we were able to achieve in our predictions. The variables we used were the distance (in meters) to the closest known safe well `distance`, the arsenic level of the household’s well `arsenic`, whether any members of the household are involved in community organizations `association`, and the highest education level in the household `education`. The variable we are predicting is whether the household switched wells `switch_well`.
+
+Fortunately, since we sourced our data from an analysis of a public health study performed in rural Bangladesh (Gelman et al. 2004), we benefit from their work processing and cleaning the data. As a result, we only need to ensure R encodes the categorical variables `switch_well` and `association` properly.
+
+In order to set a benchmark for the accuracy of our models, we construct the null model. The null model always chooses the most common overall outcome in the training data set. So, in our case, the null model always predicts that the household will switch wells since more people in our training data switched wells than didn't. This results in determining about 57.5% of the observations in the test data correctly.
+
+It's also important to note that from some exploratory data analysis, our data appears to be fairly layered and complex, with no clear distinction between those who changed wells and those who didn't. This may mean we will have difficulty making accurate predictions.
+
+The performance metrics of all of the models we used are summarized below:
+
+LOGISTIC REGRESSION
+
+Accuracy: 0.62
+
+Sensitivity: 0.793
+
+Specificity: 0.385
+
+
+XGBOOST
+
+Accuracy: 0.603
+
+Sensitivity: 0.767
+
+Specificity: 0.381
+
+
+K NEAREST NEIGHBORS
+
+Accuracy: 0.598
+
+Sensitivity: 0.724
+
+Specificity: 0.428
+
+
+RANDOM FOREST
+
+Accuracy 0.602
+
+Sensitivity: 0.71
+
+Specificity: 0.455
+
+
+SUPPORT VECTOR MACHINE
+
+Accuracy 0.588
+
+Sensitivity: 0.724
+
+Specificity: 0.405
+
+
+NEURAL NETWORK
+
+Accuracy 0.623
+
+Sensitivity: 0.776
+
+Specificity: 0.416
+
+
+The performance of the models is visualized below.
+
+```{r}
+library(patchwork) # for pretty plot display
+
+performance <- tribble(
+  ~model, ~accuracy,  ~sensitivity, ~specificity,
+  "Null Model", 57.5, NA, NA,
+  "Logistic Regression", 62,  79.3, 38.5,
+  "XGBoost", 60.3,  76.7, 38.1,
+  "KNN", 59.8,  72.4, 42.8,
+  "Random Forest", 60.2,  71, 45.5,
+  "SVC", 58.8,  72.4, 40.5,
+  "Neural Network", 62.3,  77.6, 41.6,
+)
+
+
+p1 <- ggplot(data=performance, mapping = aes(x=reorder(model,accuracy), y=accuracy) ) + geom_col() + coord_flip() + labs(y="Accuracy (%)", x="")
+
+p2 <- ggplot(data=subset(performance, !is.na(sensitivity)), mapping = aes(x=reorder(model,sensitivity), y=sensitivity)) + geom_col() + coord_flip() + labs(y="Sensitivity (%)", x="")
+
+p3 <- ggplot(data=subset(performance, !is.na(specificity)), mapping = aes(x=reorder(model,specificity), y=specificity)) + geom_col() + coord_flip() + labs(y="Specificity (%)", x="")
+
+p1 + p2 + p3 + plot_layout(ncol = 2)
+```
+
+Since these performance metrics were computed on test data that must by nature be limited in size, the following analysis is limited to the results on this test data. However, this does not mean we should disregard it, only that we should be suspicious of minute differences while being confident in larger disparities.
+
+Interestingly, we can see that none of the models are clearly the best or worst model, given that we grant accuracy, sensitivity and specificity roughly equal importance. We should also note that all of the models are more accurate than the null model, though only by what we might consider a slim margin ranging from approximately 1-5%.
+
+If we had to pick one it appears that the neural network may perform the best overall since it ranks 1st for accuracy, 2nd fo sensitivity, and 3rd for specificity, with no other model outperforming it by more than one metric. However, this again depends on how we choose to weigh the importance of these performance metrics.
+
+While the XGBoost and random forest tree models have practically identical accuracy, they achieve this through very different structures. For example, the random forest model has the highest specificity of any model while the XGBoost model's specificity is the worst of any model. In contrast, the XGBoost tree model has a more than 5.5% better sensitivity than that of the random forest model on this test data.
+
+The support vector machine, which somewhat similarly divides the data - albeit in a higher dimensional space - performs in between the two decision tree models.
+
+The logistic regression model, which we might dub the 'simplest' of the models we looked at performs surprisingly well with the second best accuracy and the best sensitivity, though it has the second worst specificity. This is a reminder that more complex models do not always yield more accurate predictions.
+
+In general, the models have much higher sensitivity and struggle for specificity. This means that a prediction from the models the household had switched wells was about twice as likely to be correct than if the model predicted the household did not switch wells (the sensitivity is, on average, double that of the specificity for the models). A possible cause is that the models only predicted a switch in households with high arsenic levels in their wells and short distances to the nearest safe well. These instances would be relatively easy to predict and thus would give the models their high sensitivity. As a consequence, however, the models would not be very specific since they would group all of the instances not in the aforementioned category as not having switched wells. These harder to predict instances would then reduce the specificity of the models, like we see above. Essentially, if there are not obvious risk factors in the instance the models are trying to predict (such as high arsenic level in the well and short distance to the nearest safe well), the instance is more difficult to predict.
+
+Another interesting note is that the models tended to either have perform better than the other models in either specificity or sensitivity, but rarely in both. In other words, it is difficult to find a model that makes both highly specific and highly sensitive predictions. Thus perhaps using a combination of different models (that are highly sensitive and highly specific) could help build reassure in predictions.
+
+This variability in the structure and performance of the models is most likely a result of the difficulty in predicting this data set that comes from the complexity of the data (it is difficult to find any clear trends or divisions in the data).
+
+There are many avenues for potential improvements in the performance of the models. For instance, with more time and a more systematic approach to selecting the size of the neural network, it would be possible to improve the performance of the neural network model further. However, due to the difficulty in predicting this data, the improvement in accuracy over the model I produced would most likely not be drastic. Similar improvements could most likely be made in all of the models with more care in selecting variables and parameters.
+
+Throughout all of these analyses, we are able to determine some insight into the relative importance of the four environmental factors we included in our analysis. Unfortunately, we were unable to determine the importance of the predictors in the k nearest neighbors, support vector machine, and and neural network. However, in the logistic regression model, we found that the $p$-values of association and education were several orders of magnitude larger than those of the other two predictors. Thus, the distance from the nearest safe well and the level of arsenic in the well were much more statistically significant in the model. Similarly, in the XGBoost decision tree, arsenic and distance were about three times more important than education and association was even less important. The random forest model had similar importance to the XGBoost model, though it had arsenic as more important than distance while the XGBoost had the inverse. 
+
+In summary, we are unable to predict whether a household will switch wells with high accuracy, but we are able to consistently outperform the null model and make incremental gains in accuracy with new models. We are also able to discern that the distance from the nearest safe well and the level of arsenic in the well are by far the most important predictors of whether someone switches wells. The level of education is much less important than these variables, and association is even less important.
+
+Some more general ways to improve the accuracy of these predictions a would be to include more data and, more interestingly, consider more variables, transformations of variables (both old and new ones), and interactions between variables. Further improvements could be made with more refinement of the models we used, as mentioned before, and by considering other models.
